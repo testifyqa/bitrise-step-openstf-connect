@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/bitrise-io/go-utils/command"
-	"github.com/bitrise-io/go-utils/log"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
@@ -16,6 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bitrise-io/go-utils/command"
+	"github.com/bitrise-io/go-utils/log"
 )
 
 type configsModel struct {
@@ -27,12 +28,12 @@ type configsModel struct {
 	adbKey            string
 }
 
-//Device ...
+// Device ...
 type Device struct {
 	Serial string `json:"serial"`
 }
 
-//RemoteConnection ...
+// RemoteConnection ...
 type RemoteConnection struct {
 	RemoteConnectURL string `json:"remoteConnectUrl"`
 }
@@ -102,17 +103,23 @@ func calculateDeviceCount(configs configsModel, serials []string) int {
 }
 
 func connectDeviceToADB(configs configsModel, serial string) error {
-	if err := addDeviceUnderControl(configs, serial); err != nil {
-		return fmt.Errorf("could not add device under control, error: %s", err)
+	maxRetries := 3
+	retryInterval := time.Second * 30
+
+	for i := 0; i < maxRetries; i++ {
+		if err := addDeviceUnderControl(configs, serial); err != nil {
+			return fmt.Errorf("could not add device under control, error: %s", err)
+		}
+		remoteConnectURL, err := getRemoteConnectURL(configs, serial)
+		if err == nil {
+			if err := connectToAdb(remoteConnectURL); err == nil {
+				return nil // Success
+			}
+		}
+		log.Warnf("Attempt %d to connect device %s failed, error: %s", i+1, serial, err)
+		time.Sleep(retryInterval)
 	}
-	remoteConnectURL, err := getRemoteConnectURL(configs, serial)
-	if err != nil {
-		return fmt.Errorf("could not get remote connect URL, error: %s", err)
-	}
-	if err := connectToAdb(remoteConnectURL); err != nil {
-		return fmt.Errorf("could not connect to ADB, error: %s", err)
-	}
-	return nil
+	return fmt.Errorf("could not connect to ADB after %d attempts", maxRetries)
 }
 
 func createConfigsModelFromEnvs() configsModel {
